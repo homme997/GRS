@@ -1,0 +1,101 @@
+# 개략공사비 안드로이드 앱(APK) 자동 빌드
+# 파일을 올리거나 Actions 탭에서 "Run workflow"를 누르면 APK를 만들어 Releases에 올립니다.
+name: APK 만들기
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 앱 껍데기(Capacitor) 만들기
+        run: |
+          mkdir -p app/www
+          cp index.html manifest.webmanifest icon-192.png icon-512.png app/www/
+          cd app
+          npm init -y
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/filesystem@6 @capacitor/share@6
+          npx cap init "개략공사비" kr.japtomok.grs --web-dir www
+          npx cap add android
+          npx cap sync android
+
+      - name: 아이콘·권한·버전 설정
+        run: |
+          pip install --quiet pillow
+          python3 - <<'PY'
+          import os
+          from PIL import Image
+          res = 'app/android/app/src/main/res'
+          src = Image.open('icon-512.png').convert('RGBA')
+          bg = src.getpixel((4, 4))
+          hexbg = '#%02x%02x%02x' % bg[:3]
+          sizes = {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}
+          for d, s in sizes.items():
+              p = f'{res}/mipmap-{d}'
+              os.makedirs(p, exist_ok=True)
+              src.resize((s, s), Image.LANCZOS).save(f'{p}/ic_launcher.png')
+              src.resize((s, s), Image.LANCZOS).save(f'{p}/ic_launcher_round.png')
+              fg = round(s * 108 / 48)
+              inner = round(fg * 0.70)
+              canvas = Image.new('RGBA', (fg, fg), (0, 0, 0, 0))
+              canvas.paste(src.resize((inner, inner), Image.LANCZOS), ((fg - inner) // 2, (fg - inner) // 2))
+              canvas.save(f'{p}/ic_launcher_foreground.png')
+          os.makedirs(f'{res}/mipmap-anydpi-v26', exist_ok=True)
+          xml = '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/gaeryak_icon_bg"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n'
+          for n in ('ic_launcher.xml', 'ic_launcher_round.xml'):
+              open(f'{res}/mipmap-anydpi-v26/{n}', 'w').write(xml)
+          os.makedirs(f'{res}/values', exist_ok=True)
+          open(f'{res}/values/gaeryak_colors.xml', 'w').write(f'<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="gaeryak_icon_bg">{hexbg}</color>\n</resources>\n')
+          m = 'app/android/app/src/main/AndroidManifest.xml'
+          t = open(m).read()
+          if 'android.permission.CAMERA' not in t:
+              t = t.replace('</manifest>', '    <uses-permission android:name="android.permission.CAMERA" />\n</manifest>')
+          open(m, 'w').write(t)
+          g = 'app/android/app/build.gradle'
+          t = open(g).read()
+          import re
+          n = os.environ.get('GITHUB_RUN_NUMBER', '1')
+          t = re.sub(r'versionCode \d+', f'versionCode {n}', t)
+          t = re.sub(r'versionName "[^"]*"', f'versionName "1.{n}"', t)
+          open(g, 'w').write(t)
+          PY
+
+      - name: 서명 키 준비 (업데이트 설치가 되도록 매번 같은 키 사용)
+        run: |
+          mkdir -p ~/.android
+          echo "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" | base64 -d > ~/.android/debug.keystore
+
+      - name: APK 빌드
+        working-directory: app/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/GRS.apk"
+
+      - name: Releases에 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk --yes --cleanup-tag || true
+          gh release create apk GRS.apk --title "개략공사비 앱 (빌드 ${{ github.run_number }})" --notes "폰에서 GRS.apk 를 눌러 받은 뒤 설치하세요." --latest
