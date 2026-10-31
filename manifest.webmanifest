@@ -1,0 +1,17 @@
+{
+  "name": "잡토목 개략공사비",
+  "short_name": "개략공사비",
+  "description": "주요수량 × 실적단가로 토목공사 개략공사비를 계산합니다 (오프라인)",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ecebd7",
+  "theme_color": "#c8102e",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
