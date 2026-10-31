@@ -231,6 +231,7 @@ table.sheet{border-collapse:collapse;width:100%;min-width:600px;font-size:13px}
 <div class="loading" id="loading">불러오는 중…</div>
 <div class="viewer" id="viewer" hidden><img id="viewerImg" alt="자재 사진"></div>
 <input type="file" id="photoIn" accept="image/*" hidden>
+<input type="file" id="photoCam" accept="image/*" capture="environment" hidden>
 
 <script>
 (() => {
@@ -245,6 +246,14 @@ const CATS = [
 const CATN = Object.fromEntries(CATS.map(c=>[c.k,c]));
 const uid = () => Math.random().toString(36).slice(2,10);
 const $ = s => document.querySelector(s);
+const NATIVE = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform==='function' && window.Capacitor.isNativePlatform());
+function nativeCall(plugin, method, opts){
+  const C = window.Capacitor;
+  const P = C.Plugins && C.Plugins[plugin];
+  if(P && typeof P[method]==='function') return P[method](opts);
+  if(typeof C.nativePromise==='function') return C.nativePromise(plugin, method, opts);
+  return Promise.reject(new Error('plugin unavailable'));
+}
 const esc = s => String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const toN = v => { if(v===''||v==null) return 0; const n = parseFloat(String(v).replace(/,/g,'')); return isFinite(n)?n:0; };
 const fmt = n => Math.round(n).toLocaleString('ko-KR');
@@ -485,7 +494,7 @@ async function init(){
   if(ok) setSave('ok',storeLabel()); else { store={kind:'none'}; setSave('err','이 브라우저에서 저장이 막혀 있어요 — 백업 파일로 보관하세요'); }
   render();
   try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
-  if('serviceWorker' in navigator && location.protocol==='https:'){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
+  if(!NATIVE && 'serviceWorker' in navigator && location.protocol==='https:'){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
 }
 function loadLocal(){
   try{
@@ -838,7 +847,7 @@ function matEditor(){
     <span></span>
     ${F('memo','메모','w4','autocomplete="off" placeholder="운반비 포함 여부, 최소 주문량 등"')}
     <div class="ph"><div class="thumb">${d.photo?`<img data-photo="${esc(d.photo)}" alt="자재 사진" hidden>`:''}<span class="noph">${d.photo?'':'사진 없음'}</span></div>
-      <button data-mact="photo"${d._busy?' disabled':''}>${d._busy?'사진 처리 중…':d.photo?'사진 바꾸기':'사진 넣기 (촬영·갤러리)'}</button>${d.photo?'<button class="danger" data-mact="rmPhoto">사진 빼기</button>':''}</div>
+      ${d._busy?'<button disabled>사진 처리 중…</button>':`<button data-mact="cam">${d.photo?'다시 촬영':'사진 촬영'}</button><button data-mact="photo">갤러리에서 선택</button>`}${d.photo?'<button class="danger" data-mact="rmPhoto">사진 빼기</button>':''}</div>
     <div class="bar"><button data-mact="cancel">취소</button><button class="primary" data-mact="save"${d._busy?' disabled':''}>저장</button></div>
   </section>`;
 }
@@ -876,6 +885,7 @@ view.addEventListener('click',async e=>{
   }
   else if(act==='view' && m && m.photo){ const src=await photoSrc(m.photo); if(src){ $('#viewerImg').src=src; $('#viewer').hidden=false; } }
   else if(act==='photo'){ $('#photoIn').click(); }
+  else if(act==='cam'){ $('#photoCam').click(); }
   else if(act==='rmPhoto' && matDraft){ matDraft.photo=''; renderView(); }
   else if(act==='cancel') closeEditor(false);
   else if(act==='save' && matDraft){
@@ -890,7 +900,7 @@ view.addEventListener('click',async e=>{
   }
   else if(act==='clearSampleMats'){ mats=mats.filter(x=>!x.sample); schedule('all'); renderView(); toast('예시 자재를 지웠어요'); }
 });
-$('#photoIn').addEventListener('change',async e=>{
+async function onPhotoPicked(e){
   const f=e.target.files[0]; e.target.value=''; if(!f||!matDraft) return;
   const d=matDraft; d._busy=true; renderView();
   try{
@@ -899,7 +909,9 @@ $('#photoIn').addEventListener('change',async e=>{
     d._new.push(id); d.photo=id;
   }catch(err){ toast('사진을 저장하지 못했어요. 다른 사진으로 다시 해 보세요'); }
   finally{ d._busy=false; if(matDraft===d){ renderView(); hydratePhotos(); } else if(d.photo && !mats.some(m=>m.photo===d.photo)) photoDel(d.photo); }
-});
+}
+$('#photoIn').addEventListener('change',onPhotoPicked);
+$('#photoCam').addEventListener('change',onPhotoPicked);
 $('#viewer').addEventListener('click',()=>{ $('#viewer').hidden=true; });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !$('#viewer').hidden) $('#viewer').hidden=true; });
 async function photosForBackup(){
@@ -917,6 +929,17 @@ $('#btnExport').addEventListener('click',async ()=>{
   const data=JSON.stringify({app:'jcost',v:2,saved:new Date().toISOString(),book,rates,projects,curId,mats,photos});
   const d=new Date(); const pad=n=>String(n).padStart(2,'0');
   const name=`개략공사비_백업_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.json`;
+  if(NATIVE){
+    try{
+      const fname = `gaeryak_backup_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.json`;
+      const r = await nativeCall('Filesystem','writeFile',{path:fname, data, directory:'CACHE', encoding:'utf8'});
+      await nativeCall('Share','share',{title:fname, files:[r.uri], dialogTitle:'백업 파일 보관할 곳 선택'});
+      toast('백업 파일을 보관할 곳(드라이브, 카톡 나에게 보내기 등)을 고르세요');
+    }catch(err){
+      if(!/cancel/i.test(String(err&&err.message))) toast('백업 파일을 만들지 못했어요');
+    }
+    return;
+  }
   const blob=new Blob([data],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click();
   setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},1000);
